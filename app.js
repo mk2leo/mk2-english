@@ -24,8 +24,8 @@
   const exportJsonBtn = document.getElementById('export-json-btn')
   const importJsonInput = document.getElementById('import-json-input')
 
-  // localStorage keys
-  const LS_KEY = 'vocab_app_state_v1'
+  // API 基礎 URL
+  const API_BASE = '/api'
 
   // 狀態
   const state = {
@@ -36,41 +36,59 @@
     quizOrder: [], // shuffled word ids
   }
 
-  function uid(){
-    return Math.random().toString(36).slice(2)+Date.now().toString(36)
+  // API 輔助函數
+  async function apiRequest(url, options = {}) {
+    try {
+      const response = await fetch(`${API_BASE}${url}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+        ...options,
+      })
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+      
+      return await response.json()
+    } catch (error) {
+      console.error('API request failed:', error)
+      throw error
+    }
   }
 
-  function save(){
-    const data = {
-      topics: state.topics,
-      wordsByTopicId: state.wordsByTopicId,
-      currentTopicId: state.currentTopicId,
+  // 載入主題列表
+  async function loadTopics() {
+    try {
+      state.topics = await apiRequest('/topics')
+      if (state.topics.length > 0 && !state.currentTopicId) {
+        state.currentTopicId = state.topics[0].id
+      }
+    } catch (error) {
+      console.error('Failed to load topics:', error)
+      state.topics = []
     }
-    localStorage.setItem(LS_KEY, JSON.stringify(data))
   }
 
-  function load(){
-    const raw = localStorage.getItem(LS_KEY)
-    if(!raw){
-      // 初始化一些示例資料
-      const topicId = uid()
-      state.topics = [{ id: topicId, name: '日常' }]
-      state.wordsByTopicId[topicId] = [
-        { id: uid(), en: 'apple', zh: '蘋果' },
-        { id: uid(), en: 'water', zh: '水' },
-        { id: uid(), en: 'book', zh: '書' },
-      ]
-      state.currentTopicId = topicId
-      save()
-      return
+  // 載入指定主題的單詞
+  async function loadWords(topicId) {
+    if (!topicId) return
+    
+    try {
+      const words = await apiRequest(`/words?topicId=${topicId}`)
+      state.wordsByTopicId[topicId] = words
+    } catch (error) {
+      console.error('Failed to load words:', error)
+      state.wordsByTopicId[topicId] = []
     }
-    try{
-      const data = JSON.parse(raw)
-      state.topics = data.topics || []
-      state.wordsByTopicId = data.wordsByTopicId || {}
-      state.currentTopicId = data.currentTopicId || (state.topics[0]?.id ?? null)
-    }catch(err){
-      console.error('load failed', err)
+  }
+
+  // 初始化載入
+  async function load() {
+    await loadTopics()
+    if (state.currentTopicId) {
+      await loadWords(state.currentTopicId)
     }
   }
 
@@ -105,12 +123,12 @@
     })
   }
 
-  function setCurrentTopic(topicId){
+  async function setCurrentTopic(topicId){
     state.currentTopicId = topicId
     currentTopicTitleEl.textContent = state.topics.find(t=>t.id===topicId)?.name || '請選擇主題'
     renderTopics()
+    await loadWords(topicId)
     renderWords()
-    save()
   }
 
   function renderWords(){
@@ -133,48 +151,94 @@
     })
   }
 
-  function addTopic(name){
+  async function addTopic(name){
     const trimmed = (name||'').trim()
     if(!trimmed) return
-    const id = uid()
-    state.topics.push({ id, name: trimmed })
-    state.wordsByTopicId[id] = []
-    setCurrentTopic(id)
-    save()
+    
+    try {
+      const newTopic = await apiRequest('/topics', {
+        method: 'POST',
+        body: JSON.stringify({ name: trimmed })
+      })
+      
+      state.topics.push(newTopic)
+      state.wordsByTopicId[newTopic.id] = []
+      await setCurrentTopic(newTopic.id)
+    } catch (error) {
+      console.error('Failed to add topic:', error)
+      alert('添加主题失败，请重试')
+    }
   }
 
-  function addWord(en, zh){
+  async function addWord(en, zh){
     const trimmedEn = (en||'').trim()
     if(!trimmedEn || !state.currentTopicId) return
-    const word = { id: uid(), en: trimmedEn, zh: (zh||'').trim() }
-    state.wordsByTopicId[state.currentTopicId].push(word)
-    save()
-    wordEnInputEl.value = ''
-    wordZhInputEl.value = ''
-    renderWords()
-  }
-
-  function deleteTopic(topicId){
-    // 移除主題及其單詞
-    const idx = state.topics.findIndex(t=>t.id===topicId)
-    if(idx === -1) return
-    state.topics.splice(idx,1)
-    delete state.wordsByTopicId[topicId]
-    if(state.currentTopicId === topicId){
-      state.currentTopicId = state.topics[0]?.id || null
+    
+    try {
+      const newWord = await apiRequest('/words', {
+        method: 'POST',
+        body: JSON.stringify({ 
+          topicId: state.currentTopicId, 
+          en: trimmedEn, 
+          zh: (zh||'').trim() 
+        })
+      })
+      
+      state.wordsByTopicId[state.currentTopicId].push(newWord)
+      wordEnInputEl.value = ''
+      wordZhInputEl.value = ''
+      renderWords()
+    } catch (error) {
+      console.error('Failed to add word:', error)
+      alert('添加单词失败，请重试')
     }
-    save()
-    renderTopics()
-    renderWords()
   }
 
-  function deleteWord(wordId){
-    const list = state.wordsByTopicId[state.currentTopicId] || []
-    const idx = list.findIndex(w=>w.id===wordId)
-    if(idx === -1) return
-    list.splice(idx,1)
-    save()
-    renderWords()
+  async function deleteTopic(topicId){
+    if (!confirm('确定要删除这个主题吗？这将删除该主题下的所有单词。')) {
+      return
+    }
+    
+    try {
+      await apiRequest(`/topics?id=${topicId}`, {
+        method: 'DELETE'
+      })
+      
+      const idx = state.topics.findIndex(t=>t.id===topicId)
+      if(idx === -1) return
+      state.topics.splice(idx,1)
+      delete state.wordsByTopicId[topicId]
+      
+      if(state.currentTopicId === topicId){
+        state.currentTopicId = state.topics[0]?.id || null
+        if (state.currentTopicId) {
+          await loadWords(state.currentTopicId)
+        }
+      }
+      
+      renderTopics()
+      renderWords()
+    } catch (error) {
+      console.error('Failed to delete topic:', error)
+      alert('删除主题失败，请重试')
+    }
+  }
+
+  async function deleteWord(wordId){
+    try {
+      await apiRequest(`/words?id=${wordId}`, {
+        method: 'DELETE'
+      })
+      
+      const list = state.wordsByTopicId[state.currentTopicId] || []
+      const idx = list.findIndex(w=>w.id===wordId)
+      if(idx === -1) return
+      list.splice(idx,1)
+      renderWords()
+    } catch (error) {
+      console.error('Failed to delete word:', error)
+      alert('删除单词失败，请重试')
+    }
   }
 
   async function translate(en){
@@ -259,15 +323,18 @@
   }
 
   // 事件綁定
-  addTopicBtn.addEventListener('click', ()=>{
-    addTopic(newTopicInputEl.value)
+  addTopicBtn.addEventListener('click', async ()=>{
+    await addTopic(newTopicInputEl.value)
     newTopicInputEl.value = ''
   })
-  newTopicInputEl.addEventListener('keydown', (e)=>{
-    if(e.key === 'Enter') addTopicBtn.click()
+  newTopicInputEl.addEventListener('keydown', async (e)=>{
+    if(e.key === 'Enter') {
+      await addTopic(newTopicInputEl.value)
+      newTopicInputEl.value = ''
+    }
   })
-  addWordBtn.addEventListener('click', ()=>{
-    addWord(wordEnInputEl.value, wordZhInputEl.value)
+  addWordBtn.addEventListener('click', async ()=>{
+    await addWord(wordEnInputEl.value, wordZhInputEl.value)
   })
   translateBtn.addEventListener('click', async ()=>{
     const en = (wordEnInputEl.value||'').trim()
@@ -334,10 +401,11 @@
   }
 
   // 啟動
-  load()
-  renderTopics()
-  if(state.currentTopicId){
-    setCurrentTopic(state.currentTopicId)
-  }
+  load().then(() => {
+    renderTopics()
+    if(state.currentTopicId){
+      setCurrentTopic(state.currentTopicId)
+    }
+  })
 })()
 

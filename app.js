@@ -120,15 +120,11 @@
       const li = document.createElement('li')
       li.className = 'word-card'
       li.innerHTML = `
-        <div class="word-row">
-          <strong>${escapeHtml(w.en)}</strong>
-          <div>
-            <button data-en="${escapeAttr(w.en)}" class="speak-btn">發音</button>
-            <button data-id="${w.id}" class="danger del-word-btn">刪除</button>
-          </div>
-        </div>
-        <div class="word-row word-zh">
-          <span>${escapeHtml(w.zh || '')}</span>
+        <div class="word-en">${escapeHtml(w.en)}</div>
+        <div class="word-translation">${escapeHtml(w.zh || '')}</div>
+        <div class="word-actions">
+          <button data-en="${escapeAttr(w.en)}" class="speak-btn">發音</button>
+          <button data-id="${w.id}" class="danger del-word-btn">刪除</button>
         </div>
       `
       li.querySelector('.speak-btn').addEventListener('click', ()=> speak(w.en))
